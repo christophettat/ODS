@@ -263,11 +263,43 @@ subid_range_total() {
     echo "$total"
 }
 
+# Enhanced rootless detection that handles Podman's Docker CLI compatibility
+# When using Podman via Docker CLI, the --format option may not work, so we
+# need to fall back to checking the full docker info output
+detect_rootless_docker() {
+    local is_rootless=false
+
+    # First try the standard method
+    if [[ "$DOCKER_INFO_OK" == true ]]; then
+        if docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q 'rootless'; then
+            is_rootless=true
+        elif docker info 2>/dev/null | grep -i 'rootless' >/dev/null 2>&1; then
+            # Alternative: check if "rootless" appears in the full output
+            is_rootless=true
+        elif [[ "$DOCKER_IS_PODMAN" == true ]]; then
+            # If we know it's Podman and Podman is running rootless, we can assume
+            # that it's rootless since Podman is rootless by default in this mode
+            # We can also try to check via podman info as a fallback
+            if command -v podman >/dev/null 2>&1; then
+                # For rootless Podman, check if the daemon is running in rootless mode
+                # by looking for rootless in the info output or checking if we're running
+                # as the non-root user that Podman expects
+                if podman info 2>/dev/null | grep -i 'rootless' >/dev/null 2>&1; then
+                    is_rootless=true
+                fi
+            fi
+        fi
+    fi
+
+    echo "$is_rootless"
+}
+
 ROOTLESS_DOCKER=false
 if [[ "${ODS_ASSUME_ROOTLESS:-0}" == "1" ]]; then
     ROOTLESS_DOCKER=true
-elif [[ "$DOCKER_INFO_OK" == true ]] && docker info --format '{{.SecurityOptions}}' 2>/dev/null | grep -q 'rootless'; then
-    ROOTLESS_DOCKER=true
+elif [[ "$DOCKER_INFO_OK" == true ]]; then
+    # Use our enhanced detection function
+    ROOTLESS_DOCKER=$(detect_rootless_docker)
 fi
 
 if [[ "$ROOTLESS_DOCKER" == true ]]; then
